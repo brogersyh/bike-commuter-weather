@@ -1,16 +1,20 @@
 FROM ubuntu:14.04
 
-RUN apt-get update
-RUN apt-get install -y --force-yes python python-dev python-setuptools software-properties-common gcc python-pip
-RUN apt-get clean all
+ENV WUNDERGROUND_API_KEY
 
-RUN pip install pyzmq
+# install python3
+RUN apt-get update \
+  && apt-get install -y --force-yes python python-dev python-setuptools software-properties-common gcc python-pip
+  && apt-get clean all
 
-RUN pip install Flask
+# install python libraries
+RUN pip install requests \
+  && pip install Flask
 
-ADD public-service.py /tmp/public-service.py
+# copy working-dir-context files to image
+ADD . /app
 
 # Flask Port
 EXPOSE 5000
 
-CMD ["python","/tmp/public-service.py"]
+ENTRYPOINT ["python","/app/public-service.py"]

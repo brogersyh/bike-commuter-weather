@@ -1,11 +1,14 @@
-FROM ubuntu:14.04
+FROM gliderlabs/alpine:3.3
 
-ENV WUNDERGROUND_API_KEY
+ENV WUNDERGROUND_API_KEY YourWundergroundApiKey
 
-# install python3
-RUN apt-get update \
-  && apt-get install -y --force-yes python python-dev python-setuptools software-properties-common gcc python-pip
-  && apt-get clean all
+RUN apk add --update \
+    python \
+    python-dev \
+    py-pip \
+    build-base \
+  && pip install virtualenv \
+  && rm -rf /var/cache/apk/*
 
 # install python libraries
 RUN pip install requests \

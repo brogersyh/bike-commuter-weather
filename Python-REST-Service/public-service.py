@@ -2,15 +2,15 @@
 
 # Bike Commuter Weather app - REST service
 
-from flask import Flask, jsonify, request, make_response
-
 import json
 import sys
 import logging
 import requests
 import os
+import datetime
 
-wundergroundApiKey = os.environ['WUNDERGROUND_API_KEY']
+from flask import Flask, jsonify, request, make_response
+from dateutil import parser
 
 httpSuccessCode = 200
 
@@ -23,7 +23,7 @@ wundergroundJsonSuffix = ".json"
 
 app = Flask(__name__)
 
-# stubbed data
+# stubbed test data - for backward compat. with older UI
 amWeatherData = [
     {
         'time': '06:00',
@@ -48,6 +48,7 @@ amWeatherData = [
     }
 ]
 
+# stubbed test data - for backward compat. with older UI
 pmWeatherData = [
     {
         'time': '16:00',
@@ -72,8 +73,13 @@ pmWeatherData = [
     }
 ]
 
+# stubbed test data, also serves as response data structure definition
 returnJson = {
     'error' : '',
+    'input' : {
+      'toMidPoint' : "07:00",
+      'fromMidPoint' : "17:30"
+    },
     'info' : {
       'asOf' : "Mar 1, 3:01pm",
       'tempStationLoc' : 'Chicago Bronzeville, Chicago, Illinois',
@@ -167,10 +173,12 @@ returnJson = {
 
 # endpoints
 
+# legacy endpoint for backward-compat. with older UI
 @app.route('/today/amrush', methods=['GET'])
 def get_amRush():
     return jsonify({'samples': amWeatherData})
 
+# legacy endpoint for backward-compat. with older UI
 @app.route('/today/pmrush', methods=['GET'])
 def get_pmRush():
     return jsonify({'samples': pmWeatherData})
@@ -179,6 +187,10 @@ def get_pmRush():
 @app.route('/commuteWeatherTodayTomorrow', methods=['GET'])
 def get_commuteWeatherTodayTomorrow():
     try:
+        wundergroundApiKey = os.environ['WUNDERGROUND_API_KEY']
+        if (wundergroundApiKey is None or wundergroundApiKey == ''):
+            raise Exception('You must specify a wunderground api key via the WUNDERGROUND_API_KEY environment var')
+
         # get params
         windStation = request.args.get('windStation')
         tempStation = request.args.get('tempStation')
@@ -186,87 +198,133 @@ def get_commuteWeatherTodayTomorrow():
         fromMidpoint = request.args.get('fromMidpoint')
 
         # get current conditions
-        tempStationConditions = get_urlJson(wundergroundBaseUrl + wundergroundApiKey + wundergroundConditions + wundergroundPwsPrefix + tempStation + wundergroundJsonSuffix)
-        windStationConditions = get_urlJson(wundergroundBaseUrl + wundergroundApiKey + wundergroundConditions + wundergroundPwsPrefix + windStation + wundergroundJsonSuffix)
+        tempStationConditions = get_weather_api_data(wundergroundBaseUrl + wundergroundApiKey + wundergroundConditions + wundergroundPwsPrefix + tempStation + wundergroundJsonSuffix)
+        windStationConditions = get_weather_api_data(wundergroundBaseUrl + wundergroundApiKey + wundergroundConditions + wundergroundPwsPrefix + windStation + wundergroundJsonSuffix)
 
         # get forecast
-        forecast = get_urlJson(wundergroundBaseUrl + wundergroundApiKey + wundergroundHourly + wundergroundPwsPrefix + tempStation + wundergroundJsonSuffix)
+        forecast = get_weather_api_data(wundergroundBaseUrl + wundergroundApiKey + wundergroundHourly + wundergroundPwsPrefix + tempStation + wundergroundJsonSuffix)
 
-        # populate return
-        # info
-        returnJson['info']['asOf'] = tempStationConditions['current_observation']['observation_time_rfc822']
+        # populate return info
+        returnJson['input']['toMidPoint'] = toMidpoint
+        returnJson['input']['fromMidPoint'] = fromMidpoint
+        # use dateutil parser for greater flexibility in time format (ignore date component)
+        toMidpointTime = parser.parse(toMidpoint)
+        fromMidpointTime = parser.parse(fromMidpoint)
+
+        asOfString = tempStationConditions['current_observation']['observation_time_rfc822']
+        asOfDatetime = parser.parse(asOfString)
+        returnJson['info']['asOf'] = asOfString
         returnJson['info']['tempStationLoc'] = tempStationConditions['current_observation']['observation_location']['full']
         returnJson['info']['windStationLoc'] = windStationConditions['current_observation']['observation_location']['full']
 
-#TODO calc tomorrow, midpoint
+        # always populate today to now
+        set_from_current(tempStationConditions, windStationConditions, returnJson['today']['to']['now'] )
 
-        # today to now
-        returnJson['today']['to']['now']['conditions'] = tempStationConditions['current_observation']['weather']
-        returnJson['today']['to']['now']['humidityPct'] = tempStationConditions['current_observation']['relative_humidity'].replace('%', '')
-        returnJson['today']['to']['now']['precipInHr'] = tempStationConditions['current_observation']['precip_1hr_in']
-        returnJson['today']['to']['now']['tempF'] = tempStationConditions['current_observation']['temp_f']
-        returnJson['today']['to']['now']['windDirection'] = windStationConditions['current_observation']['wind_dir']
-        returnJson['today']['to']['now']['windGustMph'] = windStationConditions['current_observation']['wind_gust_mph']
-        returnJson['today']['to']['now']['windSpeedMph'] = windStationConditions['current_observation']['wind_mph']
+        # populate today to midpoint
+        point = returnJson['today']['to']['midpoint']
+        set_default_data(point)
+        hourlyForecast = get_hourlyForecastIfExists(forecast, asOfDatetime, 0, 0, toMidpointTime)
+        if (hourlyForecast is not None):
+            set_from_hourly_forecast(hourlyForecast, point)
 
-        # today to midpoint
+        # populate today from before
+        point = returnJson['today']['from']['before']
+        set_default_data(point)
+        hourlyForecast = get_hourlyForecastIfExists(forecast, asOfDatetime, 0, -1, fromMidpointTime)
+        if (hourlyForecast is not None):
+            set_from_hourly_forecast(hourlyForecast, point)
 
-        returnJson['today']['to']['midpoint']['conditions'] = '-'
-        returnJson['today']['to']['midpoint']['humidityPct'] = -1
-        returnJson['today']['to']['midpoint']['precipInHr'] = -1
-        returnJson['today']['to']['midpoint']['tempF'] = -1
-        returnJson['today']['to']['midpoint']['windDirection'] = '-'
-        returnJson['today']['to']['midpoint']['windGustMph'] = -1
-        returnJson['today']['to']['midpoint']['windSpeedMph'] = -1
-
-        # today from before
-
-        returnJson['today']['from']['before']['conditions'] = '-'
-        returnJson['today']['from']['before']['humidityPct'] = -1
-        returnJson['today']['from']['before']['precipInHr'] = -1
-        returnJson['today']['from']['before']['tempF'] = -1
-        returnJson['today']['from']['before']['windDirection'] = '-'
-        returnJson['today']['from']['before']['windGustMph'] = -1
-        returnJson['today']['from']['before']['windSpeedMph'] = -1
-
-        # today from midpoint
-
-        returnJson['today']['from']['midpoint']['conditions'] = '-'
-        returnJson['today']['from']['midpoint']['humidityPct'] = -1
-        returnJson['today']['from']['midpoint']['precipInHr'] = -1
-        returnJson['today']['from']['midpoint']['tempF'] = -1
-        returnJson['today']['from']['midpoint']['windDirection'] = '-'
-        returnJson['today']['from']['midpoint']['windGustMph'] = -1
-        returnJson['today']['from']['midpoint']['windSpeedMph'] = -1
-
-
-#TODO: verify mday not just hr
-#TODO: look at 'snow' *or* 'qpf'
-        hourlyForecast = get_hourlyForecastIfExists(forecast, 17)
-
-        if (hourlyForecast != None):
-            returnJson['today']['from']['midpoint']['conditions'] = hourlyForecast['condition']
-            returnJson['today']['from']['midpoint']['humidityPct'] = hourlyForecast['humidity']
-            returnJson['today']['from']['midpoint']['precipInHr'] = hourlyForecast['qpf']['english']
-            returnJson['today']['from']['midpoint']['tempF'] = hourlyForecast['temp']['english']
-            returnJson['today']['from']['midpoint']['windDirection'] = hourlyForecast['wdir']['dir']
-            returnJson['today']['from']['midpoint']['windGustMph'] = 0
-            returnJson['today']['from']['midpoint']['windSpeedMph'] = hourlyForecast['wspd']['english']
+        # populate today from midpoint
+        point = returnJson['today']['from']['midpoint']
+        set_default_data(point)
+        hourlyForecast = get_hourlyForecastIfExists(forecast, asOfDatetime, 0, 0, fromMidpointTime)
+        if (hourlyForecast is not None):
+            set_from_hourly_forecast(hourlyForecast, point)
 
         # tomorrow to before
+        point = returnJson['tomorrow']['to']['before']
+        set_default_data(point)
+        hourlyForecast = get_hourlyForecastIfExists(forecast, asOfDatetime, 1, -1, toMidpointTime)
+        if (hourlyForecast is not None):
+            set_from_hourly_forecast(hourlyForecast, point)
 
         # tomorrow to midpoint
+        point = returnJson['tomorrow']['to']['midpoint']
+        set_default_data(point)
+        hourlyForecast = get_hourlyForecastIfExists(forecast, asOfDatetime, 1, 0, toMidpointTime)
+        if (hourlyForecast is not None):
+            set_from_hourly_forecast(hourlyForecast, point)  # tomorrow from before
 
         # tomorrow from before
+        point = returnJson['tomorrow']['from']['before']
+        set_default_data(point)
+        hourlyForecast = get_hourlyForecastIfExists(forecast, asOfDatetime, 1, -1, fromMidpointTime)
+        if (hourlyForecast is not None):
+            set_from_hourly_forecast(hourlyForecast, point)
 
         # tomorrow from midpoint
 
-        #        return jsonify({'weatherData': returnJson})
+        point = returnJson['tomorrow']['from']['midpoint']
+        set_default_data(point)
+        hourlyForecast = get_hourlyForecastIfExists(forecast, asOfDatetime, 1, 0, fromMidpointTime)
+        if (hourlyForecast is not None):
+            set_from_hourly_forecast(hourlyForecast, point)
+
+        # return
         return jsonify({'weatherData' : returnJson})
     except Exception as e:
         return make_response(jsonify({'weatherData' : { 'error': str(e)}}), 500)
 
-def get_urlJson(url):
+# find an hourly forecast (if available) for the specified current day offset, hr offset
+def get_hourlyForecastIfExists(forecast, asOfDatetime, dayOffset, hrOffset, midpointTime):
+# TODO: consider a worst-case temp/wind return for the hr after midpoint
+# TODO: Consider taking into account minute component of midpointTime
+    calced_datetime = (asOfDatetime + datetime.timedelta(days=dayOffset)).replace(hour=midpointTime.hour)
+    calced_datetime += datetime.timedelta(hours=hrOffset)
+
+    for h in forecast['hourly_forecast']:
+        f_hr = int(h['FCTTIME']['hour'])
+        f_day = int(h['FCTTIME']['mday'])
+        if (f_hr == calced_datetime.hour and f_day == calced_datetime.day):
+            return h
+
+    return None
+
+# set default "no data available" data
+def set_default_data(target):
+    target['conditions'] = '-'
+    target['humidityPct'] = -1
+    target['precipInHr'] = -1
+    target['tempF'] = -1
+    target['windDirection'] = '-'
+    target['windGustMph'] = -1
+    target['windSpeedMph'] = -1
+
+# set return json structure from current conditions structure
+def set_from_current(tempStation, windStation, target):
+    target['conditions'] = tempStation['current_observation']['weather']
+    target['humidityPct'] = tempStation['current_observation'][
+        'relative_humidity'].replace('%', '')
+    target['precipInHr'] = tempStation['current_observation']['precip_1hr_in']
+    target['tempF'] = tempStation['current_observation']['temp_f']
+    target['windDirection'] = windStation['current_observation']['wind_dir']
+    target['windGustMph'] = windStation['current_observation']['wind_gust_mph']
+    target['windSpeedMph'] = windStation['current_observation']['wind_mph']
+
+# set return json structure from forecast structure
+def set_from_hourly_forecast(forecastHour, target):
+# TODO: look at 'snow' *or* 'qpf'
+    target['conditions'] = forecastHour['condition']
+    target['humidityPct'] = forecastHour['humidity']
+    target['precipInHr'] = forecastHour['qpf']['english']
+    target['tempF'] = forecastHour['temp']['english']
+    target['windDirection'] = forecastHour['wdir']['dir']
+    target['windGustMph'] = 0
+    target['windSpeedMph'] = forecastHour['wspd']['english']
+
+
+# get weather api data for specified url
+def get_weather_api_data(url):
     response = requests.get(url)
     responseJson = response.json()
     if (response.status_code != httpSuccessCode):
@@ -276,14 +334,6 @@ def get_urlJson(url):
         raise Exception('error "' + responseJson['response']['error']['description'] + '" invoking: ' + url)
 
     return responseJson
-
-def get_hourlyForecastIfExists(forecast, hr):
-    for h in forecast['hourly_forecast']:
-        fhr = int(h['FCTTIME']['hour'])
-        if (fhr == hr):
-            return h
-
-    return None
 
 if __name__ == '__main__':
     app.run(debug=False, host='0.0.0.0')

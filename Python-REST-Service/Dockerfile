@@ -9,7 +9,8 @@ RUN apt-get update \
 
 # install python libraries
 RUN pip install requests \
-  && pip install Flask
+  && pip install Flask \
+  && pip install python-dateutil
 
 # copy working-dir-context files to image
 ADD . /app

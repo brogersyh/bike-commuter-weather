@@ -1,4 +1,4 @@
-FROM gliderlabs/alpine:3.3
+FROM alpine:3.3
 
 ENV WUNDERGROUND_API_KEY YourWundergroundApiKey
 

@@ -10,6 +10,7 @@ import os
 import datetime
 
 from flask import Flask, jsonify, request, make_response
+from flask.ext.cache import Cache
 from dateutil import parser
 
 httpSuccessCode = 200
@@ -20,8 +21,15 @@ wundergroundHourly = "/hourly/q/"
 wundergroundHistory = "/history/q/"
 wundergroundPwsPrefix = "pws:"
 wundergroundJsonSuffix = ".json"
+wundergroundDefaultApiKey = '8c7c951afe2e2a3d'
 
 app = Flask(__name__)
+
+# define the cache config keys (could be in a settings file to support memcached)
+app.config['CACHE_TYPE'] = 'simple'
+
+# register the cache instance and bind it
+app.cache = Cache(app)
 
 # stubbed test data - for backward compat. with older UI
 amWeatherData = [
@@ -77,13 +85,13 @@ pmWeatherData = [
 returnJson = {
     'error' : '',
     'input' : {
-      'toMidPoint' : "07:00",
-      'fromMidPoint' : "17:30"
+        'toMidPoint' : "07:00",
+        'fromMidPoint' : "17:30"
     },
     'info' : {
-      'asOf' : "Mar 1, 3:01pm",
-      'tempStationLoc' : 'Chicago Bronzeville, Chicago, Illinois',
-      'windStationLoc' : 'U.S. Cellular Field/Bridgeport, Chicago, Illinois'
+        'asOf' : "Mar 1, 3:01pm",
+        'tempStationLoc' : 'Chicago Bronzeville, Chicago, Illinois',
+        'windStationLoc' : 'U.S. Cellular Field/Bridgeport, Chicago, Illinois'
     },
     'today' : {
         'to' : {
@@ -185,11 +193,12 @@ def get_pmRush():
 
 # get commute am / pm weather for today & tomorrow
 @app.route('/commuteWeatherTodayTomorrow', methods=['GET'])
+@app.cache.cached(timeout=30)  # cache this endpoint for 30sec
 def get_commuteWeatherTodayTomorrow():
     try:
-        wundergroundApiKey = os.environ['WUNDERGROUND_API_KEY']
+        wundergroundApiKey = os.environ.get('WUNDERGROUND_API_KEY')
         if (wundergroundApiKey is None or wundergroundApiKey == ''):
-            raise Exception('You must specify a wunderground api key via the WUNDERGROUND_API_KEY environment var')
+            wundergroundApiKey = wundergroundDefaultApiKey
 
         # get params
         windStation = request.args.get('windStation')
@@ -277,8 +286,8 @@ def get_commuteWeatherTodayTomorrow():
 
 # find an hourly forecast (if available) for the specified current day offset, hr offset
 def get_hourlyForecastIfExists(forecast, asOfDatetime, dayOffset, hrOffset, midpointTime):
-# TODO: consider a worst-case temp/wind return for the hr after midpoint
-# TODO: Consider taking into account minute component of midpointTime
+    # TODO: consider a worst-case temp/wind return for the hr after midpoint
+    # TODO: Consider taking into account minute component of midpointTime
     calced_datetime = (asOfDatetime + datetime.timedelta(days=dayOffset)).replace(hour=midpointTime.hour)
     calced_datetime += datetime.timedelta(hours=hrOffset)
 
@@ -313,7 +322,7 @@ def set_from_current(tempStation, windStation, target):
 
 # set return json structure from forecast structure
 def set_from_hourly_forecast(forecastHour, target):
-# TODO: look at 'snow' *or* 'qpf'
+    # TODO: look at 'snow' *or* 'qpf'
     target['conditions'] = forecastHour['condition']
     target['humidityPct'] = forecastHour['humidity']
     target['precipInHr'] = forecastHour['qpf']['english']

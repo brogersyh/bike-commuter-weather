@@ -1,4 +1,4 @@
-FROM gliderlabs/alpine:3.3
+FROM alpine:3.3
 
 ENV WUNDERGROUND_API_KEY YourWundergroundApiKey
 
@@ -13,7 +13,8 @@ RUN apk add --update \
 # install python libraries
 RUN pip install requests \
   && pip install Flask \
-  && pip install python-dateutil
+  && pip install python-dateutil \
+  && pip install Flask-Cache
 
 # copy working-dir-context files to image
 ADD . /app
